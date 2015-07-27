@@ -402,12 +402,12 @@ static struct sk_buff *rndis_add_header(struct gether *port,
 	} else {
 		skb2 = skb_realloc_headroom(skb,
 				sizeof(struct rndis_packet_msg_type));
-		if (skb2)
-			rndis_add_hdr(skb2);
+	if (skb2)
+		rndis_add_hdr(skb2);
 
-		dev_kfree_skb_any(skb);
-		return skb2;
-	}
+	dev_kfree_skb_any(skb);
+	return skb2;
+}
 }
 
 static void rndis_response_available(void *_rndis)
@@ -421,8 +421,6 @@ static void rndis_response_available(void *_rndis)
 	if (atomic_inc_return(&rndis->notify_count) != 1)
 		return;
 
-	if (!rndis->notify->driver_data)
-		return;
 	/* Send RNDIS RESPONSE_AVAILABLE notification; a
 	 * USB_CDC_NOTIFY_RESPONSE_AVAILABLE "should" work too
 	 *
@@ -660,6 +658,9 @@ static int rndis_set_alt(struct usb_function *f, unsigned intf, unsigned alt)
 	} else
 		goto fail;
 
+#ifdef CONFIG_ANDROID_PANTECH_USB_MANAGER
+	usb_interface_enum_cb(RNDIS_TYPE_FLAG);
+#endif
 	return 0;
 fail:
 	return -EINVAL;
@@ -724,6 +725,16 @@ rndis_bind(struct usb_configuration *c, struct usb_function *f)
 	struct f_rndis		*rndis = func_to_rndis(f);
 	int			status;
 	struct usb_ep		*ep;
+
+#if defined(CONFIG_ANDROID_PANTECH_USB)
+//	if((pantech_usb_carrier != CARRIER_QUALCOMM) && b_pantech_usb_module){
+//	if(pantech_usb_carrier != CARRIER_QUALCOMM){
+	if((pantech_usb_carrier != CARRIER_QUALCOMM) && (!isQdssEnable)){
+		rndis_data_intf.bInterfaceProtocol =  0xFF;
+	}else{
+		rndis_data_intf.bInterfaceProtocol = 0;
+	}
+#endif
 
 	/* allocate instance-specific interface IDs */
 	status = usb_interface_id(c, f);

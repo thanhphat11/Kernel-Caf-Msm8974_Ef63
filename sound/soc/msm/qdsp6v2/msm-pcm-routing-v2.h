@@ -1,4 +1,4 @@
-/* Copyright (c) 2012-2014, The Linux Foundation. All rights reserved.
+/* Copyright (c) 2012-2013, The Linux Foundation. All rights reserved.
  *
  * This program is free software; you can redistribute it and/or modify
  * it under the terms of the GNU General Public License version 2 and
@@ -79,17 +79,9 @@ enum {
 	MSM_FRONTEND_DAI_VOICE_STUB,
 	MSM_FRONTEND_DAI_VOLTE,
 	MSM_FRONTEND_DAI_DTMF_RX,
+	MSM_FRONTEND_DAI_LSM1,
 	MSM_FRONTEND_DAI_VOICE2,
 	MSM_FRONTEND_DAI_QCHAT,
-	MSM_FRONTEND_DAI_LSM1,
-	MSM_FRONTEND_DAI_LSM2,
-	MSM_FRONTEND_DAI_LSM3,
-	MSM_FRONTEND_DAI_LSM4,
-	MSM_FRONTEND_DAI_LSM5,
-	MSM_FRONTEND_DAI_LSM6,
-	MSM_FRONTEND_DAI_LSM7,
-	MSM_FRONTEND_DAI_LSM8,
-	MSM_FRONTEND_DAI_VOWLAN,
 	MSM_FRONTEND_DAI_MAX,
 };
 
@@ -161,6 +153,14 @@ struct msm_pcm_routing_evt {
 	void *priv_data;
 };
 
+#ifdef CONFIG_PANTECH_SND_QSOUND //pantech modify 20140121 hdj
+struct msm_pcm_routing_fdai_data {
+	u16 be_srate; /* track prior backend sample rate for flushing purpose */
+	int strm_id; /* ASM stream ID */
+	struct msm_pcm_routing_evt event_info;
+};
+#endif
+
 void msm_pcm_routing_reg_phy_stream_v2(int fedai_id, bool perf_mode,
 				       int dspst_id, int stream_type,
 				       struct msm_pcm_routing_evt event_info);
@@ -174,4 +174,15 @@ int multi_ch_pcm_set_volume(unsigned volume);
 uint32_t get_adm_rx_topology(void);
 
 uint32_t get_adm_tx_topology(void);
+
+#ifdef CONFIG_PANTECH_SND_QSOUND
+struct msm_pcm_routing_bdai_data;
+#ifdef CONFIG_PANTECH_SND //pantech modify 20140121 hdj
+struct msm_pcm_routing_fdai_data* get_fe_dsp_stream_ids(int index);
+#else
+int* get_fe_dsp_stream_ids(int fe_index);
+#endif
+struct msm_pcm_routing_bdai_data* get_be_entry(int be_index);
+#endif
+
 #endif /*_MSM_PCM_H*/

@@ -665,8 +665,7 @@ adreno_ringbuffer_addcmds(struct adreno_ringbuffer *rb,
 	total_sizedwords += (flags & KGSL_CMD_FLAGS_INTERNAL_ISSUE) ? 2 : 0;
 
 	/* Add two dwords for the CP_INTERRUPT */
-	total_sizedwords +=
-		(drawctxt || (flags & KGSL_CMD_FLAGS_INTERNAL_ISSUE)) ?  2 : 0;
+	total_sizedwords += drawctxt ? 2 : 0;
 
 	if (adreno_is_a3xx(adreno_dev))
 		total_sizedwords += 7;
@@ -696,7 +695,11 @@ adreno_ringbuffer_addcmds(struct adreno_ringbuffer *rb,
 
 	/* Add space for the power on shader fixup if we need it */
 	if (flags & KGSL_CMD_FLAGS_PWRON_FIXUP)
+#ifdef CONFIG_F_QUALCOMM_GPU_PATCH_FOR_PAGE_FAULT
 		total_sizedwords += 9;
+#else
+		total_sizedwords += 5;
+#endif
 
 	ringcmds = adreno_ringbuffer_allocspace(rb, drawctxt, total_sizedwords);
 
@@ -718,11 +721,12 @@ adreno_ringbuffer_addcmds(struct adreno_ringbuffer *rb,
 	}
 
 	if (flags & KGSL_CMD_FLAGS_PWRON_FIXUP) {
+#ifdef CONFIG_F_QUALCOMM_GPU_PATCH_FOR_PAGE_FAULT
 		/* Disable protected mode for the fixup */
 		GSL_RB_WRITE(rb->device, ringcmds, rcmd_gpu,
 			cp_type3_packet(CP_SET_PROTECTED_MODE, 1));
 		GSL_RB_WRITE(rb->device, ringcmds, rcmd_gpu, 0);
-
+#endif
 		GSL_RB_WRITE(rb->device, ringcmds, rcmd_gpu, cp_nop_packet(1));
 		GSL_RB_WRITE(rb->device, ringcmds, rcmd_gpu,
 				KGSL_PWRON_FIXUP_IDENTIFIER);
@@ -732,11 +736,12 @@ adreno_ringbuffer_addcmds(struct adreno_ringbuffer *rb,
 			adreno_dev->pwron_fixup.gpuaddr);
 		GSL_RB_WRITE(rb->device, ringcmds, rcmd_gpu,
 			adreno_dev->pwron_fixup_dwords);
-
+#ifdef CONFIG_F_QUALCOMM_GPU_PATCH_FOR_PAGE_FAULT
 		/* Re-enable protected mode */
 		GSL_RB_WRITE(rb->device, ringcmds, rcmd_gpu,
 			cp_type3_packet(CP_SET_PROTECTED_MODE, 1));
 		GSL_RB_WRITE(rb->device, ringcmds, rcmd_gpu, 1);
+#endif
 	}
 
 	/* Add any IB required for profiling if it is enabled */
@@ -1227,29 +1232,6 @@ int adreno_ringbuffer_submitcmd(struct adreno_device *adreno_dev,
 
 	/* process any profiling results that are available into the log_buf */
 	adreno_profile_process_results(device);
-
-	/*
-	 * If SKIP CMD flag is set for current context
-	 * a) set SKIPCMD as fault_recovery for current commandbatch
-	 * b) store context's commandbatch fault_policy in current
-	 *    commandbatch fault_policy and clear context's commandbatch
-	 *    fault_policy
-	 * c) force preamble for commandbatch
-	 */
-	if (test_bit(ADRENO_CONTEXT_SKIP_CMD, &drawctxt->priv) &&
-		(!test_bit(CMDBATCH_FLAG_SKIP, &cmdbatch->priv))) {
-
-		set_bit(KGSL_FT_SKIPCMD, &cmdbatch->fault_recovery);
-		cmdbatch->fault_policy = drawctxt->fault_policy;
-		set_bit(CMDBATCH_FLAG_FORCE_PREAMBLE, &cmdbatch->priv);
-
-		/* if context is detached print fault recovery */
-		adreno_fault_skipcmd_detached(device, drawctxt, cmdbatch);
-
-		/* clear the drawctxt flags */
-		clear_bit(ADRENO_CONTEXT_SKIP_CMD, &drawctxt->priv);
-		drawctxt->fault_policy = 0;
-	}
 
 	/*When preamble is enabled, the preamble buffer with state restoration
 	commands are stored in the first node of the IB chain. We can skip that

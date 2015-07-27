@@ -57,6 +57,18 @@
 #include "debug.h"
 #include "io.h"
 
+#ifdef CONFIG_PANTECH_USB_DEBUG
+extern int dwc3_logmask_value;
+#undef dev_dbg
+#define dev_dbg(dev, format, arg...)	\
+	do{if(dwc3_logmask_value & USB_DEBUG_MASK) dev_printk(KERN_DEBUG, dev, format, ##arg);}while(0)
+#endif
+#ifdef CONFIG_PANTECH_USB_STATE_DEBUG
+#define LINK_STATE_MASK (1 << 1)
+int usb_link_state = DWC3_LINK_STATE_SS_INACT;
+int link_state_array[4];
+#endif
+
 static void dwc3_gadget_usb2_phy_suspend(struct dwc3 *dwc, int suspend);
 static void dwc3_gadget_usb3_phy_suspend(struct dwc3 *dwc, int suspend);
 
@@ -322,6 +334,9 @@ void dwc3_gadget_giveback(struct dwc3_ep *dep, struct dwc3_request *req,
 
 	dbg_done(dep->number, req->request.actual, req->request.status);
 	spin_unlock(&dwc->lock);
+#ifdef CONFIG_ANDROID_PANTECH_USB_MANAGER
+  if(req->request.complete)
+#endif
 	req->request.complete(&dep->endpoint, &req->request);
 	spin_lock(&dwc->lock);
 }
@@ -1670,12 +1685,22 @@ static int dwc3_gadget_vbus_draw(struct usb_gadget *g, unsigned mA)
 	return -ENOTSUPP;
 }
 
+#ifdef CONFIG_ANDROID_PANTECH_USB_MANAGER
+extern void pantech_init_device_mode_change(void);
+extern bool b_pantech_usb_module;
+extern int pantech_vbus_connect(void);
+extern int pantech_vbus_disconnect(void);
+#endif
+
 static int dwc3_gadget_pullup(struct usb_gadget *g, int is_on)
 {
 	struct dwc3		*dwc = gadget_to_dwc(g);
 	unsigned long		flags;
 	int			ret;
 
+#ifdef CONFIG_ANDROID_PANTECH_USB_MANAGER
+	pantech_init_device_mode_change();
+#endif
 	is_on = !!is_on;
 
 	spin_lock_irqsave(&dwc->lock, flags);
@@ -1714,6 +1739,11 @@ static int dwc3_gadget_vbus_session(struct usb_gadget *_gadget, int is_active)
 
 	is_active = !!is_active;
 
+#ifdef CONFIG_ANDROID_PANTECH_USB_MANAGER
+	if (dwc->gadget_driver && dwc->softconnect)
+		printk(KERN_INFO "vbus_gadget %s!!!\n", is_active ? "connect" : "disconnect");
+#endif
+
 	spin_lock_irqsave(&dwc->lock, flags);
 
 	/* Mark that the vbus was powered */
@@ -1730,8 +1760,16 @@ static int dwc3_gadget_vbus_session(struct usb_gadget *_gadget, int is_active)
 			 * signaled by the gadget driver.
 			 */
 			ret = dwc3_gadget_run_stop(dwc, 1);
+#ifdef CONFIG_ANDROID_PANTECH_USB_MANAGER
+			if(b_pantech_usb_module)
+				pantech_vbus_connect();
+#endif
 		} else {
 			ret = dwc3_gadget_run_stop(dwc, 0);
+#ifdef CONFIG_ANDROID_PANTECH_USB_MANAGER
+			if(b_pantech_usb_module)
+				pantech_vbus_disconnect();
+#endif
 		}
 	}
 
@@ -2113,8 +2151,6 @@ static int dwc3_cleanup_done_reqs(struct dwc3 *dwc, struct dwc3_ep *dep,
 			break;
 	} while (1);
 
-	dwc->gadget.xfer_isr_count++;
-
 	if (usb_endpoint_xfer_isoc(dep->endpoint.desc) &&
 			list_empty(&dep->req_queued)) {
 		if (list_empty(&dep->request_list))
@@ -2206,7 +2242,6 @@ static void dwc3_endpoint_interrupt(struct dwc3 *dwc,
 			return;
 		}
 
-		dbg_event(dep->number, "XFRCOMP", 0);
 		dwc3_endpoint_transfer_complete(dwc, dep, event, 1);
 		break;
 	case DWC3_DEPEVT_XFERINPROGRESS:
@@ -2216,11 +2251,9 @@ static void dwc3_endpoint_interrupt(struct dwc3 *dwc,
 			return;
 		}
 
-		dbg_event(dep->number, "XFRPROG", 0);
 		dwc3_endpoint_transfer_complete(dwc, dep, event, 0);
 		break;
 	case DWC3_DEPEVT_XFERNOTREADY:
-		dbg_event(dep->number, "XFRNRDY", 0);
 		if (usb_endpoint_xfer_isoc(dep->endpoint.desc)) {
 			dwc3_gadget_start_isoc(dwc, dep, event);
 		} else {
@@ -2278,7 +2311,6 @@ static void dwc3_disconnect_gadget(struct dwc3 *dwc)
 		dwc->gadget_driver->disconnect(&dwc->gadget);
 		spin_lock(&dwc->lock);
 	}
-	dwc->gadget.xfer_isr_count = 0;
 }
 
 static void dwc3_stop_active_transfer(struct dwc3 *dwc, u32 epnum)
@@ -2610,20 +2642,22 @@ static void dwc3_gadget_wakeup_interrupt(struct dwc3 *dwc)
 {
 	dev_vdbg(dwc->dev, "%s\n", __func__);
 
-	/* Only perform resume from L2 or Early suspend states */
-	if (dwc->link_state == DWC3_LINK_STATE_U3) {
-		dbg_event(0xFF, "WAKEUP", 0);
-		dwc->gadget_driver->resume(&dwc->gadget);
-	}
+	/*
+	 * TODO take core out of low power mode when that's
+	 * implemented.
+	 */
 
-	dwc->link_state = DWC3_LINK_STATE_U0;
+	dbg_event(0xFF, "WAKEUP", 0);
+	dwc->gadget_driver->resume(&dwc->gadget);
 }
 
 static void dwc3_gadget_linksts_change_interrupt(struct dwc3 *dwc,
 		unsigned int evtinfo)
 {
 	enum dwc3_link_state	next = evtinfo & DWC3_LINK_STATE_MASK;
-
+#ifdef CONFIG_PANTECH_USB_STATE_DEBUG
+	enum dwc3_link_state	pre = dwc->link_state;
+#endif
 	/*
 	 * WORKAROUND: DWC3 Revisions <1.83a have an issue which, depending
 	 * on the link partner, the USB session might do multiple entry/exit
@@ -2682,6 +2716,31 @@ static void dwc3_gadget_linksts_change_interrupt(struct dwc3 *dwc,
 
 	dwc->link_state = next;
 
+#ifdef CONFIG_PANTECH_USB_STATE_DEBUG
+	if(dwc3_logmask_value & LINK_STATE_MASK) 
+	{
+		usb_link_state = dwc->link_state;
+		queue_delayed_work(system_nrt_wq, &dwc->state_work, 0);
+		printk(KERN_ERR "%s..c_state[%d] -> next[%d]\n",__func__, pre, next);
+
+		//tarial link_state history check test
+		if (next == DWC3_LINK_STATE_RX_DET) {
+			link_state_array[2] = 0;
+			link_state_array[3] = 0;
+			link_state_array[0] = pre;	// save before Rx.Detect condition(SS.Inactive or SS.Disabled)
+			link_state_array[1] = next;	
+		} else if (pre == DWC3_LINK_STATE_RX_DET) {//else if (next == DWC3_LINK_STATE_POLL) {
+			link_state_array[2] = next;	// save after Rx.Detect condition(Poll or SS.Disabled)
+			if (next == DWC3_LINK_STATE_SS_DIS)
+				printk(KERN_ERR "%s tarial : link_state_change 0x%x->0x%x->0x%x \n", __func__,
+					link_state_array[0], link_state_array[1], link_state_array[2]);
+		} else if (pre == DWC3_LINK_STATE_POLL ) {
+			link_state_array[3] = next;	// save after Poll condition(U0 or Compliance Mode or Loopback)
+			printk(KERN_ERR "%s tarial : link_state_change 0x%x->0x%x->0x%x->0x%x \n", __func__, 
+				link_state_array[0], link_state_array[1], link_state_array[2], link_state_array[3]);
+	}
+	}
+#endif
 	dev_vdbg(dwc->dev, "%s link %d\n", __func__, dwc->link_state);
 }
 
@@ -2707,6 +2766,8 @@ static void dwc3_dump_reg_info(struct dwc3 *dwc)
 	dbg_print_reg("OCTL", dwc3_readl(dwc->regs, DWC3_OCTL));
 	dbg_print_reg("OEVT", dwc3_readl(dwc->regs, DWC3_OEVT));
 	dbg_print_reg("OSTS", dwc3_readl(dwc->regs, DWC3_OSTS));
+
+	dwc3_notify_event(dwc, DWC3_CONTROLLER_ERROR_EVENT);
 }
 
 static void dwc3_gadget_interrupt(struct dwc3 *dwc,
@@ -2735,11 +2796,9 @@ static void dwc3_gadget_interrupt(struct dwc3 *dwc,
 		dev_vdbg(dwc->dev, "Start of Periodic Frame\n");
 		break;
 	case DWC3_DEVICE_EVENT_ERRATIC_ERROR:
-		if (!dwc->err_evt_seen) {
-			dbg_event(0xFF, "ERROR", 0);
-			dev_vdbg(dwc->dev, "Erratic Error\n");
-			dwc3_dump_reg_info(dwc);
-		}
+		dbg_event(0xFF, "ERROR", 0);
+		dev_vdbg(dwc->dev, "Erratic Error\n");
+		dwc3_dump_reg_info(dwc);
 		break;
 	case DWC3_DEVICE_EVENT_CMD_CMPL:
 		dev_vdbg(dwc->dev, "Command Complete\n");
@@ -2779,8 +2838,6 @@ static void dwc3_gadget_interrupt(struct dwc3 *dwc,
 	default:
 		dev_dbg(dwc->dev, "UNKNOWN IRQ %d\n", event->type);
 	}
-
-	dwc->err_evt_seen = (event->type == DWC3_DEVICE_EVENT_ERRATIC_ERROR);
 }
 
 static void dwc3_process_event_entry(struct dwc3 *dwc,
@@ -2822,22 +2879,6 @@ static irqreturn_t dwc3_process_event_buf(struct dwc3 *dwc, u32 buf)
 		event.raw = *(u32 *) (evt->buf + evt->lpos);
 
 		dwc3_process_event_entry(dwc, &event);
-
-		if (dwc->err_evt_seen) {
-			/*
-			 * if erratic error, skip remaining events
-			 * while controller undergoes reset
-			 */
-			evt->lpos = (evt->lpos + left) %
-					DWC3_EVENT_BUFFERS_SIZE;
-			dwc3_writel(dwc->regs, DWC3_GEVNTCOUNT(buf),
-					left);
-			if (dwc3_notify_event(dwc,
-					DWC3_CONTROLLER_ERROR_EVENT))
-				dwc->err_evt_seen = 0;
-			break;
-		}
-
 		/*
 		 * XXX we wrap around correctly to the next entry as almost all
 		 * entries are 4 bytes in size. There is one entry which has 12
@@ -2862,23 +2903,12 @@ static irqreturn_t dwc3_interrupt(int irq, void *_dwc)
 
 	spin_lock(&dwc->lock);
 
-	dwc->irq_cnt++;
-
-	if (dwc->err_evt_seen) {
-		/* controller reset is still pending */
-		spin_unlock(&dwc->lock);
-		return IRQ_HANDLED;
-	}
-
 	for (i = 0; i < dwc->num_event_buffers; i++) {
 		irqreturn_t status;
 
 		status = dwc3_process_event_buf(dwc, i);
 		if (status == IRQ_HANDLED)
 			ret = status;
-
-		if (dwc->err_evt_seen)
-			break;
 	}
 
 	spin_unlock(&dwc->lock);
@@ -2933,7 +2963,12 @@ int __devinit dwc3_gadget_init(struct dwc3 *dwc)
 	dev_set_name(&dwc->gadget.dev, "gadget");
 
 	dwc->gadget.ops			= &dwc3_gadget_ops;
+
+#ifdef CONFIG_ANDROID_PANTECH_USB_SUPER_SPEED
 	dwc->gadget.max_speed		= USB_SPEED_SUPER;
+#else
+	dwc->gadget.max_speed		= USB_SPEED_HIGH;
+#endif
 	dwc->gadget.speed		= USB_SPEED_UNKNOWN;
 	dwc->gadget.dev.parent		= dwc->dev;
 	dwc->gadget.sg_supported	= true;

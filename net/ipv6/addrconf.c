@@ -91,8 +91,13 @@
 #include <linux/seq_file.h>
 #include <linux/export.h>
 
+#ifdef CONFIG_LGU_DS_OPTIMIZE_IPV6_ASSIGNMENT_CRASH_FIX
+/* Set to 3 to get tracing... */
+#define ACONF_DEBUG 3
+#else
 /* Set to 3 to get tracing... */
 #define ACONF_DEBUG 2
+#endif /* CONFIG_LGU_DS_OPTIMIZE_IPV6_ASSIGNMENT_CRASH_FIX */
 
 #if ACONF_DEBUG >= 3
 #define ADBG(x) printk x
@@ -195,7 +200,6 @@ static struct ipv6_devconf ipv6_devconf __read_mostly = {
 	.accept_ra_rt_info_max_plen = 0,
 #endif
 #endif
-	.accept_ra_rt_table	= 0,
 	.proxy_ndp		= 0,
 	.accept_source_route	= 0,	/* we do not accept RH0 by default. */
 	.disable_ipv6		= 0,
@@ -231,7 +235,6 @@ static struct ipv6_devconf ipv6_devconf_dflt __read_mostly = {
 	.accept_ra_rt_info_max_plen = 0,
 #endif
 #endif
-	.accept_ra_rt_table	= 0,
 	.proxy_ndp		= 0,
 	.accept_source_route	= 0,	/* we do not accept RH0 by default. */
 	.disable_ipv6		= 0,
@@ -279,6 +282,14 @@ static void addrconf_mod_timer(struct inet6_ifaddr *ifp,
 	switch (what) {
 	case AC_DAD:
 		ifp->timer.function = addrconf_dad_timer;
+
+#ifdef CONFIG_LGU_DS_OPTIMIZE_IPV6_ASSIGNMENT
+       if(strncmp( ifp->idev->dev->name, "rmnet", 5) == 0 )
+       {
+         printk(KERN_CRIT "addrconf_mod_timer() DAD timer start when %lu to 50 ms\n", when);
+         when = 5;
+	   }
+#endif       
 		break;
 	case AC_RS:
 		ifp->timer.function = addrconf_rs_timer;
@@ -658,6 +669,16 @@ ipv6_add_addr(struct inet6_dev *idev, const struct in6_addr *addr, int pfxlen,
 	ifa->scope = scope;
 	ifa->prefix_len = pfxlen;
 	ifa->flags = flags | IFA_F_TENTATIVE;
+  
+#ifdef CONFIG_LGU_DS_OPTIMIZE_IPV6_ASSIGNMENT
+   if(strncmp( idev->dev->name, "rmnet",5) == 0 
+    && !(addr_type & IPV6_ADDR_LINKLOCAL) )
+   {
+     printk(KERN_CRIT "ipv6_add_addr() set mask NODAD\n");
+     ifa->flags |= IFA_F_NODAD; 
+   }
+#endif   
+   
 	ifa->cstamp = ifa->tstamp = jiffies;
 
 	ifa->rt = rt;
@@ -671,7 +692,9 @@ ipv6_add_addr(struct inet6_dev *idev, const struct in6_addr *addr, int pfxlen,
 	hash = ipv6_addr_hash(addr);
 
 	hlist_add_head_rcu(&ifa->addr_lst, &inet6_addr_lst[hash]);
+#ifndef CONFIG_LGU_DS_OPTIMIZE_IPV6_ASSIGNMENT_CRASH_FIX  
 	spin_unlock(&addrconf_hash_lock);
+#endif /* CONFIG_LGU_DS_OPTIMIZE_IPV6_ASSIGNMENT_CRASH_FIX */
 
 	write_lock(&idev->lock);
 	/* Add to inet6_dev unicast addr list. */
@@ -686,6 +709,9 @@ ipv6_add_addr(struct inet6_dev *idev, const struct in6_addr *addr, int pfxlen,
 
 	in6_ifa_hold(ifa);
 	write_unlock(&idev->lock);
+#ifdef CONFIG_LGU_DS_OPTIMIZE_IPV6_ASSIGNMENT_CRASH_FIX
+	spin_unlock(&addrconf_hash_lock);
+#endif /* CONFIG_LGU_DS_OPTIMIZE_IPV6_ASSIGNMENT_CRASH_FIX */
 out2:
 	rcu_read_unlock_bh();
 
@@ -722,7 +748,9 @@ static void ipv6_del_addr(struct inet6_ifaddr *ifp)
 
 	spin_lock_bh(&addrconf_hash_lock);
 	hlist_del_init_rcu(&ifp->addr_lst);
+#ifndef CONFIG_LGU_DS_OPTIMIZE_IPV6_ASSIGNMENT_CRASH_FIX  
 	spin_unlock_bh(&addrconf_hash_lock);
+#endif /* CONFIG_LGU_DS_OPTIMIZE_IPV6_ASSIGNMENT_CRASH_FIX */
 
 	write_lock_bh(&idev->lock);
 #ifdef CONFIG_IPV6_PRIVACY
@@ -775,7 +803,9 @@ static void ipv6_del_addr(struct inet6_ifaddr *ifp)
 		}
 	}
 	write_unlock_bh(&idev->lock);
-
+#ifdef CONFIG_LGU_DS_OPTIMIZE_IPV6_ASSIGNMENT_CRASH_FIX
+	spin_unlock_bh(&addrconf_hash_lock);
+#endif /* CONFIG_LGU_DS_OPTIMIZE_IPV6_ASSIGNMENT_CRASH_FIX */
 	addrconf_del_timer(ifp);
 
 	ipv6_ifa_notify(RTM_DELADDR, ifp);
@@ -1692,31 +1722,6 @@ static int __ipv6_try_regen_rndid(struct inet6_dev *idev, struct in6_addr *tmpad
 }
 #endif
 
-u32 addrconf_rt_table(const struct net_device *dev, u32 default_table) {
-	/* Determines into what table to put autoconf PIO/RIO/default routes
-	 * learned on this device.
-	 *
-	 * - If 0, use the same table for every device. This puts routes into
-	 *   one of RT_TABLE_{PREFIX,INFO,DFLT} depending on the type of route
-	 *   (but note that these three are currently all equal to
-	 *   RT6_TABLE_MAIN).
-	 * - If > 0, use the specified table.
-	 * - If < 0, put routes into table dev->ifindex + (-rt_table).
-	 */
-	struct inet6_dev *idev = in6_dev_get(dev);
-	u32 table;
-	int sysctl = idev->cnf.accept_ra_rt_table;
-	if (sysctl == 0) {
-		table = default_table;
-	} else if (sysctl > 0) {
-		table = (u32) sysctl;
-	} else {
-		table = (unsigned) dev->ifindex + (-sysctl);
-	}
-	in6_dev_put(idev);
-	return table;
-}
-
 /*
  *	Add prefix route.
  */
@@ -1726,7 +1731,7 @@ addrconf_prefix_route(struct in6_addr *pfx, int plen, struct net_device *dev,
 		      unsigned long expires, u32 flags)
 {
 	struct fib6_config cfg = {
-		.fc_table = addrconf_rt_table(dev, RT6_TABLE_PREFIX),
+		.fc_table = RT6_TABLE_PREFIX,
 		.fc_metric = IP6_RT_PRIO_ADDRCONF,
 		.fc_ifindex = dev->ifindex,
 		.fc_expires = expires,
@@ -1760,8 +1765,7 @@ static struct rt6_info *addrconf_get_prefix_route(const struct in6_addr *pfx,
 	struct rt6_info *rt = NULL;
 	struct fib6_table *table;
 
-	table = fib6_get_table(dev_net(dev),
-			       addrconf_rt_table(dev, RT6_TABLE_PREFIX));
+	table = fib6_get_table(dev_net(dev), RT6_TABLE_PREFIX);
 	if (table == NULL)
 		return NULL;
 
@@ -2816,13 +2820,17 @@ static int addrconf_ifdown(struct net_device *dev, int how)
 		snmp6_unregister_dev(idev);
 
 	}
+#ifdef CONFIG_LGU_DS_OPTIMIZE_IPV6_ASSIGNMENT_CRASH_FIX
+	spin_lock_bh(&addrconf_hash_lock);
+#endif /* CONFIG_LGU_DS_OPTIMIZE_IPV6_ASSIGNMENT_CRASH_FIX */
 
 	/* Step 2: clear hash table */
 	for (i = 0; i < IN6_ADDR_HSIZE; i++) {
 		struct hlist_head *h = &inet6_addr_lst[i];
 		struct hlist_node *n;
-
+#ifndef CONFIG_LGU_DS_OPTIMIZE_IPV6_ASSIGNMENT_CRASH_FIX
 		spin_lock_bh(&addrconf_hash_lock);
+#endif /* CONFIG_LGU_DS_OPTIMIZE_IPV6_ASSIGNMENT_CRASH_FIX */
 	restart:
 		hlist_for_each_entry_rcu(ifa, n, h, addr_lst) {
 			if (ifa->idev == idev) {
@@ -2831,7 +2839,9 @@ static int addrconf_ifdown(struct net_device *dev, int how)
 				goto restart;
 			}
 		}
+#ifndef CONFIG_LGU_DS_OPTIMIZE_IPV6_ASSIGNMENT_CRASH_FIX    
 		spin_unlock_bh(&addrconf_hash_lock);
+#endif /* CONFIG_LGU_DS_OPTIMIZE_IPV6_ASSIGNMENT_CRASH_FIX */
 	}
 
 	write_lock_bh(&idev->lock);
@@ -2886,6 +2896,9 @@ static int addrconf_ifdown(struct net_device *dev, int how)
 	}
 
 	write_unlock_bh(&idev->lock);
+#ifdef CONFIG_LGU_DS_OPTIMIZE_IPV6_ASSIGNMENT_CRASH_FIX
+	spin_unlock_bh(&addrconf_hash_lock);
+#endif /* CONFIG_LGU_DS_OPTIMIZE_IPV6_ASSIGNMENT_CRASH_FIX */
 
 	/* Step 5: Discard multicast list */
 	if (how)
@@ -3950,7 +3963,6 @@ static inline void ipv6_store_devconf(struct ipv6_devconf *cnf,
 	array[DEVCONF_ACCEPT_RA_RT_INFO_MAX_PLEN] = cnf->accept_ra_rt_info_max_plen;
 #endif
 #endif
-	array[DEVCONF_ACCEPT_RA_RT_TABLE] = cnf->accept_ra_rt_table;
 	array[DEVCONF_PROXY_NDP] = cnf->proxy_ndp;
 	array[DEVCONF_ACCEPT_SOURCE_ROUTE] = cnf->accept_source_route;
 #ifdef CONFIG_IPV6_OPTIMISTIC_DAD
@@ -4578,13 +4590,6 @@ static struct addrconf_sysctl_table
 		},
 #endif
 #endif
-		{
-			.procname	= "accept_ra_rt_table",
-			.data		= &ipv6_devconf.accept_ra_rt_table,
-			.maxlen		= sizeof(int),
-			.mode		= 0644,
-			.proc_handler	= proc_dointvec,
-		},
 		{
 			.procname	= "proxy_ndp",
 			.data		= &ipv6_devconf.proxy_ndp,

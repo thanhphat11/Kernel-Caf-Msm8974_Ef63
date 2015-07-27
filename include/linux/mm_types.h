@@ -14,6 +14,7 @@
 #include <linux/page-debug-flags.h>
 #include <asm/page.h>
 #include <asm/mmu.h>
+#include <mach/pantech_memlog.h>
 
 #ifndef AT_VECTOR_SIZE_ARCH
 #define AT_VECTOR_SIZE_ARCH 0
@@ -149,6 +150,11 @@ struct page {
 	 */
 	void *shadow;
 #endif
+
+#ifdef CONFIG_PANTECH_MEM_LEAK_TRACE
+	struct page_onwer_info onwer_info;
+#endif
+
 }
 /*
  * The struct page can be forced to be double word aligned so that atomic ops
@@ -216,10 +222,6 @@ struct vm_area_struct {
 	 * linkage into the address_space->i_mmap prio tree, or
 	 * linkage to the list of like vmas hanging off its node, or
 	 * linkage of vma in the address_space->i_mmap_nonlinear list.
-	 *
-	 * For private anonymous mappings, a pointer to a null terminated string
-	 * in the user process containing the name given to the vma, or NULL
-	 * if unnamed.
 	 */
 	union {
 		struct {
@@ -229,7 +231,6 @@ struct vm_area_struct {
 		} vm_set;
 
 		struct raw_prio_tree_node prio_tree_node;
-		const char __user *anon_name;
 	} shared;
 
 	/*
@@ -395,16 +396,6 @@ static inline void mm_init_cpumask(struct mm_struct *mm)
 static inline cpumask_t *mm_cpumask(struct mm_struct *mm)
 {
 	return mm->cpu_vm_mask_var;
-}
-
-
-/* Return the name for an anonymous mapping or NULL for a file-backed mapping */
-static inline const char __user *vma_get_anon_name(struct vm_area_struct *vma)
-{
-	if (vma->vm_file)
-		return NULL;
-
-	return vma->shared.anon_name;
 }
 
 #endif /* _LINUX_MM_TYPES_H */

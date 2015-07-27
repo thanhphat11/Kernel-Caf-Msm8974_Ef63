@@ -61,6 +61,7 @@
 #include <linux/migrate.h>
 #include <linux/page-debug-flags.h>
 
+#include <mach/pantech_memlog.h>
 #include <asm/tlbflush.h>
 #include <asm/div64.h>
 #include "internal.h"
@@ -657,8 +658,6 @@ static void free_pcppages_bulk(struct zone *zone, int count,
 	int migratetype = 0;
 	int batch_free = 0;
 	int to_free = count;
-	int free = 0;
-	int cma_free = 0;
 	int mt = 0;
 
 	spin_lock(&zone->lock);
@@ -689,29 +688,28 @@ static void free_pcppages_bulk(struct zone *zone, int count,
 		do {
 			page = list_entry(list->prev, struct page, lru);
 			mt = get_pageblock_migratetype(page);
-			if (likely(mt != MIGRATE_ISOLATE))
-				mt = page_private(page);
-
 			/* must delete as __free_one_page list manipulates */
 			list_del(&page->lru);
 			/* MIGRATE_MOVABLE list may include MIGRATE_RESERVEs */
-			__free_one_page(page, zone, 0, mt);
-			trace_mm_page_pcpu_drain(page, 0, mt);
-			if (likely(mt != MIGRATE_ISOLATE)) {
-				free++;
-				if (is_migrate_cma(mt))
-					cma_free++;
-			}
+			__free_one_page(page, zone, 0, page_private(page));
+			trace_mm_page_pcpu_drain(page, 0, page_private(page));
+			if (is_migrate_cma(mt))
+				__mod_zone_page_state(zone,
+				NR_FREE_CMA_PAGES, 1);
 		} while (--to_free && --batch_free && !list_empty(list));
 	}
-	__mod_zone_page_state(zone, NR_FREE_PAGES, free);
-	__mod_zone_page_state(zone, NR_FREE_CMA_PAGES, cma_free);
+	__mod_zone_page_state(zone, NR_FREE_PAGES, count);
 	spin_unlock(&zone->lock);
 }
 
 static void free_one_page(struct zone *zone, struct page *page, int order,
 				int migratetype)
 {
+
+#ifdef CONFIG_PANTECH_MEM_LEAK_TRACE
+	writeLog_free_info(order, page);
+#endif
+
 	spin_lock(&zone->lock);
 	zone->pages_scanned = 0;
 
@@ -788,6 +786,7 @@ bool is_cma_pageblock(struct page *page)
 {
 	return get_pageblock_migratetype(page) == MIGRATE_CMA;
 }
+EXPORT_SYMBOL(is_cma_pageblock); /* P14527: Add for texfat module */
 
 /* Free whole pageblock and set it's migration type to MIGRATE_CMA. */
 void __init init_cma_reserved_pageblock(struct page *page)
@@ -1414,6 +1413,11 @@ void free_hot_cold_page(struct page *page, int cold)
 		free_pcppages_bulk(zone, pcp->batch, pcp);
 		pcp->count -= pcp->batch;
 	}
+
+#ifdef CONFIG_PANTECH_MEM_LEAK_TRACE
+    writeLog_free_info(0, page);
+#endif
+
 
 out:
 	local_irq_restore(flags);
@@ -2645,6 +2649,11 @@ out:
 	 */
 	if (unlikely(!put_mems_allowed(cpuset_mems_cookie) && !page))
 		goto retry_cpuset;
+
+#ifdef CONFIG_PANTECH_MEM_LEAK_TRACE
+	if(page)
+		writeLog_alloc_info(order, page);
+#endif
 
 	return page;
 }

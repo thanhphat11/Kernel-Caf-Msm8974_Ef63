@@ -33,6 +33,7 @@
 #include <trace/events/power.h>
 #include <mach/socinfo.h>
 #include <mach/cpufreq.h>
+#include <mach/pantech_debug.h>
 
 #include "acpuclock.h"
 
@@ -135,6 +136,16 @@ static int set_cpu_freq(struct cpufreq_policy *policy, unsigned int new_freq,
 	cpufreq_notify_transition(&freqs, CPUFREQ_PRECHANGE);
 
 	trace_cpu_frequency_switch_start(freqs.old, freqs.new, policy->cpu);
+
+#if defined(CONFIG_PANTECH_DEBUG)
+#if defined(CONFIG_PANTECH_DEBUG_DCVS_LOG) //p14291_pantech_dbg
+//    printk(KERN_ERR "CPU[%d] : Switching  %u KHz -> %u KHz\n",
+//				        policy->cpu, freqs.old, freqs.new);
+
+    if(pantech_debug_enable)
+		 pantech_debug_dcvs_log(policy->cpu, freqs.old, freqs.new);
+#endif
+#endif 
 	if (is_clk) {
 		unsigned long rate = new_freq * 1000;
 		rate = clk_round_rate(cpu_clk[policy->cpu], rate);
@@ -149,6 +160,8 @@ static int set_cpu_freq(struct cpufreq_policy *policy, unsigned int new_freq,
 
 	if (!ret) {
 		trace_cpu_frequency_switch_end(policy->cpu);
+
+
 		cpufreq_notify_transition(&freqs, CPUFREQ_POSTCHANGE);
 	}
 
@@ -228,9 +241,6 @@ static int msm_cpufreq_verify(struct cpufreq_policy *policy)
 
 static unsigned int msm_cpufreq_get_freq(unsigned int cpu)
 {
-	if (is_clk && is_sync)
-		cpu = 0;
-
 	if (is_clk)
 		return clk_get_rate(cpu_clk[cpu]) / 1000;
 
@@ -329,38 +339,22 @@ static int __cpuinit msm_cpufreq_cpu_callback(struct notifier_block *nfb,
 	 * before the CPU is brought up.
 	 */
 	case CPU_DEAD:
+	case CPU_UP_CANCELED:
 		if (is_clk) {
 			clk_disable_unprepare(cpu_clk[cpu]);
 			clk_disable_unprepare(l2_clk);
 			update_l2_bw(NULL);
 		}
 		break;
-	case CPU_UP_CANCELED:
-		if (is_clk) {
-			clk_unprepare(cpu_clk[cpu]);
-			clk_unprepare(l2_clk);
-			update_l2_bw(NULL);
-		}
-		break;
 	case CPU_UP_PREPARE:
 		if (is_clk) {
-			rc = clk_prepare(l2_clk);
+			rc = clk_prepare_enable(l2_clk);
 			if (rc < 0)
 				return NOTIFY_BAD;
-			rc = clk_prepare(cpu_clk[cpu]);
+			rc = clk_prepare_enable(cpu_clk[cpu]);
 			if (rc < 0)
 				return NOTIFY_BAD;
 			update_l2_bw(&cpu);
-		}
-		break;
-	case CPU_STARTING:
-		if (is_clk) {
-			rc = clk_enable(l2_clk);
-			if (rc < 0)
-				return NOTIFY_BAD;
-			rc = clk_enable(cpu_clk[cpu]);
-			if (rc < 0)
-				return NOTIFY_BAD;
 		}
 		break;
 	default:

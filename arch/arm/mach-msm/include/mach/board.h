@@ -1,7 +1,7 @@
 /* arch/arm/mach-msm/include/mach/board.h
  *
  * Copyright (C) 2007 Google, Inc.
- * Copyright (c) 2008-2013, 2015 The Linux Foundation. All rights reserved.
+ * Copyright (c) 2008-2013, The Linux Foundation. All rights reserved.
  * Author: Brian Swetland <swetland@google.com>
  *
  * This software is licensed under the terms of the GNU General Public
@@ -189,8 +189,11 @@ struct msm_gpio_set_tbl {
 };
 
 struct msm_camera_gpio_num_info {
-	uint16_t gpio_num[13];
-	uint8_t valid[13];
+#ifdef CONFIG_PANTECH_CAMERA
+	uint16_t gpio_num[11];
+#else
+	uint16_t gpio_num[7];
+#endif
 };
 
 struct msm_camera_gpio_conf {
